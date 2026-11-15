@@ -1,197 +1,427 @@
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Buffered English to Persian Translator</title>
+    <title>Live English to Persian Translator</title>
     <style>
-        body { font-family: Tahoma, Arial, sans-serif; padding: 20px; background: #f0f2f5; margin: 0; }
-        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-        h2 { text-align: center; color: #333; margin-bottom: 5px; }
-        input { width: calc(100% - 22px); padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 6px; text-align: left; }
-        .btn { display: block; width: 100%; padding: 15px; font-size: 18px; font-weight: bold; color: white; background: #007bff; border: none; border-radius: 8px; cursor: pointer; margin-bottom: 10px; }
-        .btn:disabled { background: #aaa; cursor: not-allowed; }
-        #stopBtn { background: #dc3545; display: none; }
-        #output { min-height: 200px; padding: 15px; background: #fafafa; border: 1px solid #ddd; border-radius: 8px; font-size: 22px; line-height: 1.8; color: #111; margin-top: 10px; }
-        .status { text-align: center; color: #666; font-size: 14px; margin-bottom: 15px; font-weight: bold; }
+        body {
+            font-family: Tahoma, Arial, sans-serif;
+            padding: 20px;
+            background: #f0f2f5;
+            margin: 0;
+        }
+
+        .container {
+            max-width: 640px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        h2 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        input,
+        select {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 10px;
+            margin-bottom: 12px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            text-align: left;
+        }
+
+        .row {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 12px;
+            direction: ltr;
+        }
+
+        .row label {
+            font-size: 13px;
+            color: #444;
+            white-space: nowrap;
+        }
+
+        .row select {
+            margin-bottom: 0;
+        }
+
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 15px;
+            font-size: 18px;
+            font-weight: bold;
+            color: white;
+            background: #007bff;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-bottom: 10px;
+        }
+
+        #stopBtn {
+            background: #dc3545;
+            display: none;
+        }
+
+        #output {
+            min-height: 220px;
+            padding: 15px;
+            background: #fafafa;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 22px;
+            line-height: 1.9;
+            color: #111;
+            margin-top: 10px;
+            white-space: pre-wrap;
+        }
+
+        .status {
+            text-align: center;
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 15px;
+            font-weight: bold;
+        }
     </style>
 </head>
+
 <body>
 
-<div class="container">
-    <h2>Buffered Translator (15s)</h2>
-    <div class="status" id="status">Waiting for connection...</div>
-    
-    <input type="password" id="apiKey" placeholder="Enter Gemini API Key (starts with AIza...)" dir="ltr">
-    
-    <button class="btn" id="startBtn">Start Speaking (English)</button>
-    <button class="btn" id="stopBtn">Stop</button>
+    <div class="container">
+        <h2>Live Translator (Continuous Real-Time)</h2>
+        <div class="status" id="status">Ready to start.</div>
 
-    <div id="output"></div>
-</div>
+        <input type="password" id="apiKey" placeholder="Enter Gemini API Key (AQ... or AIza...)" dir="ltr">
 
-<script>
-    let ws;
-    let audioContext;
-    let processor;
-    let globalStream;
-    let pcmBuffer = [];
-    
-    const SAMPLE_RATE = 16000;
-    const BUFFER_SECONDS = 15;
-    const BUFFER_LIMIT = SAMPLE_RATE * BUFFER_SECONDS;
+        <select id="modelSelect" dir="ltr">
+            <option value="models/gemini-3.5-live-translate-preview">models/gemini-3.5-live-translate-preview
+                (Simultaneous - No Pause Needed)</option>
+            <option value="models/gemini-3.8-live">models/gemini-3.8-live (Windowed Continuous)</option>
+            <option value="models/gemini-3.1-flash-live-preview">models/gemini-3.1-flash-live-preview (Windowed
+                Continuous)</option>
+            <option value="models/gemini-2.5-flash-native-audio-latest">models/gemini-2.5-flash-native-audio-latest
+                (Windowed Continuous)</option>
+        </select>
 
-    const startBtn = document.getElementById('startBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const outputDiv = document.getElementById('output');
-    const statusDiv = document.getElementById('status');
+        <div class="row" id="windowRow">
+            <label for="chunkSeconds">Max commit interval (for non-translate models):</label>
+            <select id="chunkSeconds">
+                <option value="3000">Every 3 sec</option>
+                <option value="5000" selected>Every 5 sec</option>
+                <option value="7000">Every 7 sec</option>
+                <option value="10000">Every 10 sec</option>
+            </select>
+        </div>
 
-    startBtn.onclick = async () => {
-        const apiKey = document.getElementById('apiKey').value.trim();
-        if (!apiKey) return alert("Please enter your Gemini API Key.");
+        <button class="btn" id="startBtn">Start Speaking (English)</button>
+        <button class="btn" id="stopBtn">Stop</button>
 
-        outputDiv.innerHTML = "";
-        pcmBuffer = [];
-        startBtn.style.display = "none";
-        stopBtn.style.display = "block";
-        statusDiv.innerText = "Connecting to Gemini Live API...";
+        <div id="output"></div>
+    </div>
 
-        const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
-        ws = new WebSocket(wsUrl);
+    <script>
+        let ws = null;
+        let audioContext = null;
+        let processor = null;
+        let globalStream = null;
+        let commitTimer = null;
+        let sentAudioInWindow = false;
+        let isStopping = false;
+        let retryCount = 0;
+        const MAX_RETRIES = 3;
 
-        ws.onopen = () => {
-            statusDiv.innerText = `Connected. Buffering (0/${BUFFER_SECONDS}s)...`;
-            
-            ws.send(JSON.stringify({
-                setup: {
-                    model: "models/gemini-3.8-live",
-                    generationConfig: { responseModalities: ["TEXT"] },
-                    systemInstruction: {
-                        parts: [{ text: "You are an expert translator. I will provide 15-second audio chunks of English speech. Translate the speech continuously into Persian (Farsi) text. Output only the translation without any conversational filler." }]
-                    }
-                }
-            }));
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const outputDiv = document.getElementById('output');
+        const statusDiv = document.getElementById('status');
+        const modelSelect = document.getElementById('modelSelect');
+        const windowRow = document.getElementById('windowRow');
 
-            startAudioCapture();
+        function updateWindowVisibility() {
+            const isNativeTranslate = modelSelect.value === "models/gemini-3.5-live-translate-preview";
+            windowRow.style.display = isNativeTranslate ? "none" : "flex";
+        }
+        modelSelect.onchange = updateWindowVisibility;
+        updateWindowVisibility();
+
+        startBtn.onclick = () => {
+            const apiKey = document.getElementById('apiKey').value.trim();
+            if (!apiKey) return alert("Please enter your Gemini API Key.");
+
+            isStopping = false;
+            retryCount = 0;
+            outputDiv.textContent = "";
+            connectSession(apiKey);
         };
 
-        ws.onmessage = async (e) => {
-            try {
-                // Check if the response is a Blob and convert it to text
-                let responseText = e.data;
-                if (e.data instanceof Blob) {
-                    responseText = await e.data.text();
+        stopBtn.onclick = () => {
+            isStopping = true;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                if (modelSelect.value !== "models/gemini-3.5-live-translate-preview" && sentAudioInWindow) {
+                    ws.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
                 }
+                ws.close(1000, "User stopped");
+            } else {
+                resetUI("Stopped. Ready to start.");
+            }
+        };
 
-                const res = JSON.parse(responseText);
-                
-                if (res.serverContent && res.serverContent.modelTurn) {
-                    res.serverContent.modelTurn.parts.forEach(part => {
-                        if (part.text) {
-                            outputDiv.innerHTML += part.text;
+        function buildSetupPayload(model) {
+            if (model === "models/gemini-3.5-live-translate-preview") {
+                return {
+                    model,
+                    generationConfig: {
+                        responseModalities: ["AUDIO"],
+                        translationConfig: {
+                            targetLanguageCode: "fa"
                         }
-                    });
-                }
-            } catch (err) {
-                console.error("Error processing message:", err);
+                    },
+                    outputAudioTranscription: {}
+                };
             }
-        };
 
-        ws.onerror = () => {
-            statusDiv.innerText = "WebSocket Error occurred.";
-            resetUI();
-        };
-        
-        ws.onclose = () => {
-            statusDiv.innerText = "Connection closed.";
-            resetUI();
-        };
-    };
-
-    stopBtn.onclick = () => {
-        // Flush any remaining audio in the buffer before closing
-        if (pcmBuffer.length > 0) {
-            statusDiv.innerText = "Flushing remaining audio...";
-            sendAudioChunk(pcmBuffer);
-        }
-        
-        // Brief timeout to allow the final WebSocket message to transmit
-        setTimeout(() => {
-            if (ws) ws.close();
-            resetUI();
-        }, 500);
-    };
-
-    function sendAudioChunk(samplesArray) {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        
-        const pcm16 = new Int16Array(samplesArray);
-        const buffer = new Uint8Array(pcm16.buffer);
-        let binary = '';
-        
-        // Base64 Encode
-        for (let i = 0; i < buffer.byteLength; i++) {
-            binary += String.fromCharCode(buffer[i]);
-        }
-        
-        ws.send(JSON.stringify({
-            realtimeInput: {
-                mediaChunks: [{
-                    mimeType: "audio/pcm;rate=16000",
-                    data: btoa(binary)
-                }]
-            }
-        }));
-    }
-
-    async function startAudioCapture() {
-        try {
-            globalStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
-            const source = audioContext.createMediaStreamSource(globalStream);
-            
-            processor = audioContext.createScriptProcessor(4096, 1, 1);
-            source.connect(processor);
-            processor.connect(audioContext.destination);
-
-            processor.onaudioprocess = (e) => {
-                if (ws.readyState !== WebSocket.OPEN) return;
-
-                const inputData = e.inputBuffer.getChannelData(0);
-                
-                // Convert Float32 to Int16 and push to array
-                for (let i = 0; i < inputData.length; i++) {
-                    let s = Math.max(-1, Math.min(1, inputData[i]));
-                    pcmBuffer.push(s < 0 ? s * 0x8000 : s * 0x7FFF);
-                }
-
-                // Update UI counter roughly every second
-                if (pcmBuffer.length % SAMPLE_RATE < 4096) {
-                    const currentSeconds = Math.floor(pcmBuffer.length / SAMPLE_RATE);
-                    statusDiv.innerText = `Recording... buffering (${currentSeconds}/${BUFFER_SECONDS}s)`;
-                }
-
-                // Transmit chunk when 15 seconds is reached
-                if (pcmBuffer.length >= BUFFER_LIMIT) {
-                    statusDiv.innerText = "Transmitting chunk...";
-                    sendAudioChunk(pcmBuffer);
-                    pcmBuffer = []; // Clear buffer for the next 15 seconds
+            return {
+                model,
+                generationConfig: {
+                    responseModalities: ["AUDIO"]
+                },
+                outputAudioTranscription: {},
+                realtimeInputConfig: {
+                    activityHandling: "NO_INTERRUPTION",
+                    automaticActivityDetection: {
+                        disabled: true
+                    }
+                },
+                systemInstruction: {
+                    parts: [{
+                        text: "You are a simultaneous English-to-Persian live interpreter. Immediately translate each incoming English speech segment into natural Persian (Farsi). Output ONLY the Persian translation without any English, greetings, explanations, or filler. Do not reply to questions—only translate what is spoken."
+                    }]
                 }
             };
-        } catch (err) {
-            statusDiv.innerText = "Microphone access denied.";
-            resetUI();
         }
-    }
 
-    function resetUI() {
-        if (audioContext) audioContext.close();
-        if (processor) processor.disconnect();
-        if (globalStream) globalStream.getTracks().forEach(t => t.stop());
-        startBtn.style.display = "block";
-        stopBtn.style.display = "none";
-        pcmBuffer = [];
-    }
-</script>
+        function connectSession(apiKey) {
+            const model = modelSelect.value;
+            const isNativeTranslate = model === "models/gemini-3.5-live-translate-preview";
+
+            startBtn.style.display = "none";
+            stopBtn.style.display = "block";
+            statusDiv.innerText = retryCount > 0
+                ? `Reconnecting (${retryCount}/${MAX_RETRIES})...`
+                : "Connecting to Gemini Live API...";
+
+            const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${encodeURIComponent(apiKey)}`;
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                statusDiv.innerText = "Connected. Initializing session...";
+                ws.send(JSON.stringify({ setup: buildSetupPayload(model) }));
+            };
+
+            ws.onmessage = async (e) => {
+                try {
+                    const responseText = e.data instanceof Blob ? await e.data.text() : e.data;
+                    const res = JSON.parse(responseText);
+
+                    if (res.setupComplete) {
+                        retryCount = 0;
+                        statusDiv.innerText = "Listening and translating continuously...";
+                        await startAudioCapture(!isNativeTranslate);
+                        return;
+                    }
+
+                    if (res.serverContent) {
+                        const sc = res.serverContent;
+
+                        if (sc.outputTranscription && sc.outputTranscription.text) {
+                            outputDiv.textContent += sc.outputTranscription.text;
+                        }
+
+                        if (sc.modelTurn && sc.modelTurn.parts) {
+                            for (const part of sc.modelTurn.parts) {
+                                if (!part.thought && part.text) {
+                                    outputDiv.textContent += part.text;
+                                }
+                            }
+                        }
+
+                        if (sc.turnComplete && outputDiv.textContent && !/\s$/.test(outputDiv.textContent)) {
+                            outputDiv.textContent += " ";
+                        }
+                    }
+                } catch (err) {
+                    console.error("Error processing message:", err);
+                }
+            };
+
+            ws.onerror = (err) => {
+                console.error("WebSocket error:", err);
+            };
+
+            ws.onclose = (e) => {
+                console.log("WebSocket closed:", e.code, e.reason);
+                stopAudioCapture();
+
+                if (isStopping) {
+                    resetUI("Stopped. Ready to start.");
+                    return;
+                }
+
+                if (e.code === 1011 && retryCount < MAX_RETRIES) {
+                    retryCount++;
+                    const delayMs = retryCount * 1500;
+                    statusDiv.innerText = `Server returned 1011. Retrying in ${(delayMs / 1000).toFixed(1)}s...`;
+                    setTimeout(() => {
+                        if (!isStopping) connectSession(apiKey);
+                    }, delayMs);
+                    return;
+                }
+
+                const reason = e.reason ? ` (${e.reason})` : "";
+                resetUI(`Connection closed: code ${e.code}${reason}`);
+            };
+        }
+
+        function downsampleTo16k(buffer, inputSampleRate) {
+            if (inputSampleRate === 16000) return buffer;
+            const ratio = inputSampleRate / 16000;
+            const newLength = Math.round(buffer.length / ratio);
+            const result = new Float32Array(newLength);
+            let offsetResult = 0;
+            let offsetBuffer = 0;
+            while (offsetResult < result.length) {
+                const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+                let accum = 0;
+                let count = 0;
+                for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+                    accum += buffer[i];
+                    count++;
+                }
+                result[offsetResult] = count > 0 ? accum / count : 0;
+                offsetResult++;
+                offsetBuffer = nextOffsetBuffer;
+            }
+            return result;
+        }
+
+        function float32ToBase64Pcm16(float32Array) {
+            const pcm16 = new Int16Array(float32Array.length);
+            for (let i = 0; i < float32Array.length; i++) {
+                const s = Math.max(-1, Math.min(1, float32Array[i]));
+                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+            }
+            const bytes = new Uint8Array(pcm16.buffer);
+            let binary = '';
+            for (let i = 0; i < bytes.byteLength; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return btoa(binary);
+        }
+
+        async function startAudioCapture(useManualWindowing) {
+            try {
+                if (audioContext && audioContext.state !== 'closed') return;
+
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                globalStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    }
+                });
+
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+
+                const source = audioContext.createMediaStreamSource(globalStream);
+                processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+                const zeroGain = audioContext.createGain();
+                zeroGain.gain.value = 0;
+
+                source.connect(processor);
+                processor.connect(zeroGain);
+                zeroGain.connect(audioContext.destination);
+
+                sentAudioInWindow = false;
+                if (useManualWindowing && ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
+                    const intervalMs = Number(document.getElementById('chunkSeconds').value);
+                    commitTimer = setInterval(() => {
+                        if (!ws || ws.readyState !== WebSocket.OPEN || !sentAudioInWindow) return;
+                        ws.send(JSON.stringify({ realtimeInput: { activityEnd: {} } }));
+                        ws.send(JSON.stringify({ realtimeInput: { activityStart: {} } }));
+                        sentAudioInWindow = false;
+                    }, intervalMs);
+                }
+
+                processor.onaudioprocess = (e) => {
+                    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    const pcmFloat = downsampleTo16k(inputData, audioContext.sampleRate);
+                    const base64Audio = float32ToBase64Pcm16(pcmFloat);
+
+                    ws.send(JSON.stringify({
+                        realtimeInput: {
+                            audio: {
+                                mimeType: "audio/pcm;rate=16000",
+                                data: base64Audio
+                            }
+                        }
+                    }));
+                    sentAudioInWindow = true;
+                };
+            } catch (err) {
+                console.error(err);
+                isStopping = true;
+                if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+                resetUI("Microphone access denied or unavailable.");
+            }
+        }
+
+        function stopAudioCapture() {
+            if (commitTimer) {
+                clearInterval(commitTimer);
+                commitTimer = null;
+            }
+            if (processor) {
+                processor.disconnect();
+                processor = null;
+            }
+            if (audioContext && audioContext.state !== 'closed') {
+                audioContext.close();
+                audioContext = null;
+            }
+            if (globalStream) {
+                globalStream.getTracks().forEach(t => t.stop());
+                globalStream = null;
+            }
+        }
+
+        function resetUI(statusMessage = "Ready to start.") {
+            stopAudioCapture();
+            startBtn.style.display = "block";
+            stopBtn.style.display = "none";
+            statusDiv.innerText = statusMessage;
+        }
+    </script>
 </body>
+
 </html>
