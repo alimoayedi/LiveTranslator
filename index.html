@@ -75,14 +75,25 @@
             startAudioCapture();
         };
 
-        ws.onmessage = (e) => {
-            const res = JSON.parse(e.data);
-            if (res.serverContent && res.serverContent.modelTurn) {
-                res.serverContent.modelTurn.parts.forEach(part => {
-                    if (part.text) {
-                        outputDiv.innerHTML += part.text;
-                    }
-                });
+        ws.onmessage = async (e) => {
+            try {
+                // Check if the response is a Blob and convert it to text
+                let responseText = e.data;
+                if (e.data instanceof Blob) {
+                    responseText = await e.data.text();
+                }
+
+                const res = JSON.parse(responseText);
+                
+                if (res.serverContent && res.serverContent.modelTurn) {
+                    res.serverContent.modelTurn.parts.forEach(part => {
+                        if (part.text) {
+                            outputDiv.innerHTML += part.text;
+                        }
+                    });
+                }
+            } catch (err) {
+                console.error("Error processing message:", err);
             }
         };
 
