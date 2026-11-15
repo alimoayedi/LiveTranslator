@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buffered English to Persian Translator</title>
+    <style>
+        body { font-family: Tahoma, Arial, sans-serif; padding: 20px; background: #f0f2f5; margin: 0; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        h2 { text-align: center; color: #333; margin-bottom: 5px; }
+        input { width: calc(100% - 22px); padding: 10px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 6px; text-align: left; }
+        .btn { display: block; width: 100%; padding: 15px; font-size: 18px; font-weight: bold; color: white; background: #007bff; border: none; border-radius: 8px; cursor: pointer; margin-bottom: 10px; }
+        .btn:disabled { background: #aaa; cursor: not-allowed; }
+        #stopBtn { background: #dc3545; display: none; }
+        #output { min-height: 200px; padding: 15px; background: #fafafa; border: 1px solid #ddd; border-radius: 8px; font-size: 22px; line-height: 1.8; color: #111; margin-top: 10px; }
+        .status { text-align: center; color: #666; font-size: 14px; margin-bottom: 15px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Buffered Translator (15s)</h2>
+    <div class="status" id="status">Waiting for connection...</div>
+    
+    <input type="password" id="apiKey" placeholder="Enter Gemini API Key (starts with AIza...)" dir="ltr">
+    
+    <button class="btn" id="startBtn">Start Speaking (English)</button>
+    <button class="btn" id="stopBtn">Stop</button>
+
+    <div id="output"></div>
+</div>
+
+<script>
+    let ws;
+    let audioContext;
+    let processor;
+    let globalStream;
+    let pcmBuffer = [];
+    
+    const SAMPLE_RATE = 16000;
+    const BUFFER_SECONDS = 15;
+    const BUFFER_LIMIT = SAMPLE_RATE * BUFFER_SECONDS;
+
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const outputDiv = document.getElementById('output');
+    const statusDiv = document.getElementById('status');
+
+    startBtn.onclick = async () => {
+        const apiKey = document.getElementById('apiKey').value.trim();
+        if (!apiKey) return alert("Please enter your Gemini API Key.");
+
+        outputDiv.innerHTML = "";
+        pcmBuffer = [];
+        startBtn.style.display = "none";
+        stopBtn.style.display = "block";
+        statusDiv.innerText = "Connecting to Gemini Live API...";
+
+        const wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${apiKey}`;
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            statusDiv.innerText = `Connected. Buffering (0/${BUFFER_SECONDS}s)...`;
+            
+            ws.send(JSON.stringify({
+                setup: {
+                    model: "models/gemini-3.8-live",
+                    generationConfig: { responseModalities: ["TEXT"] },
+                    systemInstruction: {
+                        parts: [{ text: "You are an expert translator. I will provide 15-second audio chunks of English speech. Translate the speech continuously into Persian (Farsi) text. Output only the translation without any conversational filler." }]
+                    }
+                }
+            }));
+
+            startAudioCapture();
+        };
+
+        ws.onmessage = (e) => {
+            const res = JSON.parse(e.data);
+            if (res.serverContent && res.serverContent.modelTurn) {
+                res.serverContent.modelTurn.parts.forEach(part => {
+                    if (part.text) {
+                        outputDiv.innerHTML += part.text;
+                    }
+                });
+            }
+        };
+
+        ws.onerror = () => {
+            statusDiv.innerText = "WebSocket Error occurred.";
+            resetUI();
+        };
+        
+        ws.onclose = () => {
+            statusDiv.innerText = "Connection closed.";
+            resetUI();
+        };
+    };
+
+    stopBtn.onclick = () => {
+        // Flush any remaining audio in the buffer before closing
+        if (pcmBuffer.length > 0) {
+            statusDiv.innerText = "Flushing remaining audio...";
+            sendAudioChunk(pcmBuffer);
+        }
+        
+        // Brief timeout to allow the final WebSocket message to transmit
+        setTimeout(() => {
+            if (ws) ws.close();
+            resetUI();
+        }, 500);
+    };
+
+    function sendAudioChunk(samplesArray) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        
+        const pcm16 = new Int16Array(samplesArray);
+        const buffer = new Uint8Array(pcm16.buffer);
+        let binary = '';
+        
+        // Base64 Encode
+        for (let i = 0; i < buffer.byteLength; i++) {
+            binary += String.fromCharCode(buffer[i]);
+        }
+        
+        ws.send(JSON.stringify({
+            realtimeInput: {
+                mediaChunks: [{
+                    mimeType: "audio/pcm;rate=16000",
+                    data: btoa(binary)
+                }]
+            }
+        }));
+    }
+
+    async function startAudioCapture() {
+        try {
+            globalStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+            const source = audioContext.createMediaStreamSource(globalStream);
+            
+            processor = audioContext.createScriptProcessor(4096, 1, 1);
+            source.connect(processor);
+            processor.connect(audioContext.destination);
+
+            processor.onaudioprocess = (e) => {
+                if (ws.readyState !== WebSocket.OPEN) return;
+
+                const inputData = e.inputBuffer.getChannelData(0);
+                
+                // Convert Float32 to Int16 and push to array
+                for (let i = 0; i < inputData.length; i++) {
+                    let s = Math.max(-1, Math.min(1, inputData[i]));
+                    pcmBuffer.push(s < 0 ? s * 0x8000 : s * 0x7FFF);
+                }
+
+                // Update UI counter roughly every second
+                if (pcmBuffer.length % SAMPLE_RATE < 4096) {
+                    const currentSeconds = Math.floor(pcmBuffer.length / SAMPLE_RATE);
+                    statusDiv.innerText = `Recording... buffering (${currentSeconds}/${BUFFER_SECONDS}s)`;
+                }
+
+                // Transmit chunk when 15 seconds is reached
+                if (pcmBuffer.length >= BUFFER_LIMIT) {
+                    statusDiv.innerText = "Transmitting chunk...";
+                    sendAudioChunk(pcmBuffer);
+                    pcmBuffer = []; // Clear buffer for the next 15 seconds
+                }
+            };
+        } catch (err) {
+            statusDiv.innerText = "Microphone access denied.";
+            resetUI();
+        }
+    }
+
+    function resetUI() {
+        if (audioContext) audioContext.close();
+        if (processor) processor.disconnect();
+        if (globalStream) globalStream.getTracks().forEach(t => t.stop());
+        startBtn.style.display = "block";
+        stopBtn.style.display = "none";
+        pcmBuffer = [];
+    }
+</script>
+</body>
+</html>
